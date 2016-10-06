@@ -307,6 +307,9 @@ flower_port = 5555
 # Default queue that tasks get assigned to and that worker listen on.
 default_queue = default
 
+# Cache for dedup tasks
+redis_host = localhost
+redis_port = 6379
 
 [scheduler]
 # Task instances listen for external kill signal (when you clear tasks
