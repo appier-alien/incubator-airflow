@@ -16,6 +16,8 @@ from builtins import object
 import logging
 import subprocess
 import time
+import hashlib
+import redis
 
 from celery import Celery
 from celery import states as celery_states
@@ -25,6 +27,9 @@ from airflow.executors.base_executor import BaseExecutor
 from airflow import configuration
 
 PARALLELISM = configuration.get('core', 'PARALLELISM')
+
+REDIS_HOST = configuration.get('celery', 'REDIS_HOST')
+REDIS_PORT = configuration.getint('celery', 'REDIS_PORT')
 
 '''
 To start the celery worker, run the command:
@@ -59,6 +64,13 @@ def execute_command(command):
         raise AirflowException('Celery command failed')
 
 
+def key_for_command(cmd):
+    """
+    It returns the key in redis for the command cmd for dedup.
+    """
+    return 'airflow:{}'.format(hashlib.sha256(str.encode(cmd)).hexdigest())
+
+
 class CeleryExecutor(BaseExecutor):
     """
     CeleryExecutor is recommended for production use of Airflow. It allows
@@ -72,9 +84,18 @@ class CeleryExecutor(BaseExecutor):
     def start(self):
         self.tasks = {}
         self.last_state = {}
+        self.redis = redis.StrictRedis(host=REDIS_HOST, port=REDIS_PORT)
 
     def execute_async(self, key, command, queue=DEFAULT_QUEUE):
-        self.logger.info( "[celery] queuing {key} through celery, "
+        redis_key = key_for_command(command)
+        self.logger.info('[celery] Key for command({}) is: {}'.format(command, redis_key))
+        if self.redis.get(redis_key):
+            self.logger.info('[celery] Command({}) is already enqueued with key: {}'.format(command, redis_key))
+            return
+
+        self.redis.set(redis_key, command)
+        self.logger.info('[celery] Set command({}) to cache with key: {}'.format(command, redis_key))
+        self.logger.info("[celery] queuing {key} through celery, "
                        "queue={queue}".format(**locals()))
         self.tasks[key] = execute_command.apply_async(
             args=[command], queue=queue)
